@@ -15,7 +15,7 @@ AI is smart.
 다만 당신의 일을, 바로 이해하진 못하죠.  
 But it doesn’t understand your work right away.
 
-당신이 일하는 법을 알려주면, 더 잘 잘할거에요.  
+당신이 일하는 법을 알려주면, 더 잘할거에요.  
 Teach it how you work, and it will do better.
 
 ---
