@@ -1,4 +1,5 @@
-﻿using Microsoft.Web.WebView2.Core;
+﻿using Markdig;
+using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -7,6 +8,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace LLM_IDE
 {
@@ -27,7 +29,42 @@ namespace LLM_IDE
 		{
 			InitializeComponent();
 			LogList.ItemsSource = LogHistory;
+
+			// [DC-04] 파이프라인에 UseAdvancedExtensions()가 반드시 포함되어야 표가 파싱됩니다.
+			// var pipeline = new Markdig.MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+			
+			// Markdig.Wpf.Markdown.DefaultPipeline = pipeline;
+
+			// this.rcvMsg
+
+			// 직접 컨트롤 검색 (가장 확실한 Fail-Safe)
+			var viewer = this.FindName("rcvMsg") as Markdig.Wpf.MarkdownViewer;
+
+			if (viewer != null)
+			{
+				var pipeline = new Markdig.MarkdownPipelineBuilder()
+			.UseAdvancedExtensions()
+			.UsePipeTables()
+			.Build();
+				viewer.Pipeline = pipeline;
+				Debug.WriteLine("[Success] rcvMsg를 찾아 파이프라인을 주입했습니다.");
+			}
+			else
+			{
+				Debug.WriteLine("[Error] 여전히 rcvMsg를 찾을 수 없습니다. XAML 이름을 확인하세요.");
+			}
+
 			LoadProjectConfig();
+
+			// 웹뷰 가리기.
+			//Panel.SetZIndex(WebPopup, -1); // 계층도 뒤로 보냄
+			//WebScale.ScaleX = 0;
+			//WebScale.ScaleY = 0;
+			//Task.Run(() => {
+			//	// MainWebView.EnsureCoreWebView2Async();
+				
+			//});
+			MainWebView.DefaultBackgroundColor = System.Drawing.Color.Transparent;
 		}
 
 		// 1. 노트패드 연동 (더블클릭 시)
@@ -112,8 +149,68 @@ namespace LLM_IDE
 		}
 
 		// 3. 웹뷰 팝업 제어
-		private void BtnShowWeb_Click(object sender, RoutedEventArgs e) => WebPopup.Visibility = Visibility.Visible;
-		private void BtnCloseWeb_Click(object sender, RoutedEventArgs e) => WebPopup.Visibility = Visibility.Collapsed;
+		private void BtnShowWeb_Click(object sender, RoutedEventArgs e)
+		{
+			// [1] 유령 엔진 칸의 너비를 확장 (그리드 Column 정의 접근)
+			// 0:프로젝트, 1:스플리터, 2:중앙로그, 3:엔진칸
+			// EngineCol.Width = new GridLength(1, GridUnitType.Star);
+
+			if (EngineCol.Width.Value < 10) // 현재 숨김 상태로 간주
+			{
+
+				EngineCol.Width = new GridLength(800);
+				MainWebView.Width = 800;
+				BtnShowWeb.Content = "Close";
+			}
+			else
+			{ 				
+				EngineCol.Width = new GridLength(1);
+				MainWebView.Width = 100;
+				BtnShowWeb.Content = "Open";
+			}
+
+			// [2] 웹뷰의 크기도 사용자 시야에 맞게 확장 (기존 100에서 800 이상으로)
+			// MainWebView.Width = EngineWrapper.Width;
+			// MainWebView.Height = EngineWrapper.Height;
+
+			// [3] 최상단 레이어로 호출
+			// Panel.SetZIndex(EngineWrapper, 99);
+
+			// [4] 가시성 보장 (혹시 몰라 추가)
+			// EngineWrapper.Visibility = Visibility.Visible;
+			// EngineWrapper.Background = System.Windows.Media.Brushes.White; // 배경색도 확실히 보이도록
+
+			// 버튼 텍스트 변경 (Toggle 방식 운영 시)
+			
+			// 클릭 이벤트 분기를 위해 상태 체크 로직을 넣거나, 별도 닫기 버튼을 두는 것이 좋습니다.
+		}
+
+		private void BtnCloseWeb_Click(object sender, RoutedEventArgs e)
+		{
+			EngineCol.Width = new GridLength(1);
+			//// [핵심] 크기를 0으로 줄여서 숨김 (가시성은 Visible 유지)
+			//WebScale.ScaleX = 0;
+			//WebScale.ScaleY = 0;
+
+			//MainWebView.IsHitTestVisible = false;
+
+			//Panel.SetZIndex(WebPopup, -1); // 계층도 뒤로 보냄
+
+			// 1. 가시성은 무조건 Visible (엔진 가동 유지)
+			// WebPopup.Visibility = Visibility.Hidden;
+
+			// 2. 물리적 크기를 1x1로 축소 (0으로 하면 엔진이 멈춤)
+			// MainWebView.Width = 1;
+			// MainWebView.Height = 1;
+
+			// 3. 혹시 모를 잔상 방지를 위해 구석으로 밀기
+			MainWebView.HorizontalAlignment = HorizontalAlignment.Left;
+			MainWebView.VerticalAlignment = VerticalAlignment.Top;
+			MainWebView.Margin = new Thickness(0, 0, 0, 0);
+
+			// 4. 클릭 전파 방지
+			MainWebView.IsHitTestVisible = false;
+		}
 
 		private async void BtnSend_Click(object sender, RoutedEventArgs e)
 		{
@@ -366,89 +463,297 @@ namespace LLM_IDE
 
 		private async Task<string> PollForResponseAsync(LogData currentLog)
 		{
-			int timeoutSeconds = 150;
-			int checkIntervalMs = 500;
-			int maxTicks = (timeoutSeconds * 1000 / checkIntervalMs);
+			// [DC-04] 상수 정의: 반응성 극대화를 위해 300ms 인터벌 권장
+			const int CHECK_INTERVAL_MS = 300;
+			const int TIMEOUT_SECONDS = 150;
+			int maxTicks = (TIMEOUT_SECONDS * 1000 / CHECK_INTERVAL_MS);
 
-			// [Logic] 외부 JS 파일 경로 설정 (실행 파일 기준 Scripts 폴더 내 배치 가정)
+			// pending 까지 임시 대기
+			await Task.Delay(500);
+
+			// [ID-01] 사수 고정 경로 (수정 금지)
 			string scriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "", "pollingLogic.js");
-
 
 			for (int i = 0; i < maxTicks; i++)
 			{
-				Debug.WriteLine($"[Polling] 체크 {i + 1}/{maxTicks}...");
-				
-
-				// [D-03] 디테일 사수: 매 틱마다 파일을 새로 읽지 않고 캐싱할 수 있으나, 
-				// 개발 단계에서의 즉각적인 JS 수정을 반영하기 위해 파일 읽기 수행
+				// [ER-03] 파일 존재 유무 확인
 				if (!File.Exists(scriptPath))
 				{
-					Debug.WriteLine($"[Error] 스크립트 파일 유실: {scriptPath}");
-					await Task.Delay(checkIntervalMs);
-					continue;
+					Debug.WriteLine($"[Error] 스크립트 유실: {scriptPath}");
+					break;
 				}
-
-				string jsTemplate = File.ReadAllText(scriptPath);
-
-				// [Logic] 특수문자 및 줄바꿈 파손 방지를 위한 안전한 이스케이프
-				string escapedInput = System.Web.HttpUtility.JavaScriptStringEncode(currentLog.UserInput);
-
-				// [D-03] 사수 지시 반영: conversation-container 기준 역순 탐색 로직 주입
-				// [D-01] 구분자 주입: 템플릿 내 지정된 치환자를 실제 데이터로 교체
-				// JS 파일 끝에 (/*DATA_INJECTION*/); 와 같은 식별자를 두어 데이터를 주입함
-				string checkScript = jsTemplate.Replace("/*DATA_INJECTION*/", $"\"{escapedInput}\"");
-
-
-				string jsonResult = await MainWebView.ExecuteScriptAsync(checkScript);
-				//if (string.IsNullOrEmpty(jsonResult) || jsonResult == "null")
-				//	continue;
-
-				// [Logic] WebView2 반환 JSON 정규화
-				string normalizedJson = jsonResult.Trim('"').Replace("\\\"", "\"").Replace("\\\\", "\\");
 
 				try
 				{
+					string jsTemplate = File.ReadAllText(scriptPath);
+					string escapedInput = System.Web.HttpUtility.JavaScriptStringEncode(currentLog.UserInput);
+					string checkScript = jsTemplate.Replace("/*DATA_INJECTION*/", $"\"{escapedInput}\"");
+
+					// [FN-02] JS 실행 및 결과 수신
+					string jsonResult = await MainWebView.ExecuteScriptAsync(checkScript);
+
+					if (string.IsNullOrEmpty(jsonResult) || jsonResult == "null")
+					{
+						await Task.Delay(CHECK_INTERVAL_MS);
+						continue;
+					}
+
+					string normalizedJson = jsonResult.Trim('"').Replace("\\\"", "\"").Replace("\\\\", "\\");
+
 					using (JsonDocument doc = JsonDocument.Parse(normalizedJson))
 					{
 						var root = doc.RootElement;
-						string jsLog = root.GetProperty("log").GetString() ?? "";
+						bool isPending = root.GetProperty("isPendingActive").GetBoolean();
+						bool isValid = root.GetProperty("isValidBlock").GetBoolean();
+						bool isDone = root.GetProperty("isFinished").GetBoolean();
 
-						// [L-01] 실측 데이터 보고: JS 내부 비교 로그를 C# 디버그 창에 출력
-						if (!string.IsNullOrEmpty(jsLog))
+						// 텍스트(Streaming용)와 HTML(최종 파싱용) 추출
+						string currentText = root.GetProperty("text").GetString() ?? "";
+						string currentHtml = root.TryGetProperty("html", out var h) ? h.GetString() ?? "" : "";
+
+						// 1. Pending 상태일 경우 UI 피드백 후 대기 (사수님 로직 보존)
+						if (isPending == true)
 						{
-							Debug.WriteLine($"\n=== [JS Comparison Log] Tick {i + 1} (Reverse Scan) ===\n{jsLog}====================================================");
+							currentLog.Status = "응답 대기 중...";
+							await Task.Delay(CHECK_INTERVAL_MS);
+							continue;
 						}
 
-						string currentText = root.GetProperty("text").GetString() ?? "";
-						bool isFinished = root.GetProperty("isFinished").GetBoolean();
-						bool isValidBlock = root.GetProperty("isValidBlock").GetBoolean();
-
-						if (isValidBlock)
+						// 2. [Stream Point] 실시간 텍스트 업데이트
+						if (isValid == true)
 						{
-							// 실시간 UI 스트리밍 업데이트
-							if (currentText != currentLog.LlmOutput)
+							currentLog.Status = "데이터 수신 중...";
+
+							// 스트리밍 중에는 'text' 필드를 우선적으로 보여줌 (Flickering 방지)
+							if (isDone == false && currentLog.LlmOutput != currentText)
 							{
 								currentLog.LlmOutput = currentText;
+								Debug.WriteLine($"[Streaming] Recv: {currentText.Length} chars");
 							}
 
-							if (isFinished)
+							// 3. [Final Point] 완료 신호 시 HTML 기반 정밀 파싱 적용
+							if (isDone == true)
 							{
-								Debug.WriteLine("[Success] 최신 블록 정밀 매칭 확인 및 수신 종료.");
-								return currentText;
+								Debug.WriteLine($"[Success] 최종 신호 포착. HTML 구조 안정화 대기 시작.");
+
+								// [Action] 300ms 간격으로 최대 5회(1.5초) 대기하며 UI에 상태 표시
+								for (int waitCount = 1; waitCount <= 5; waitCount++)
+								{
+									currentLog.Status = $"최종 데이터 검증 중... ({waitCount}/5)";
+									Debug.WriteLine($"[Wait] 안정화 대기 {waitCount}회차...");
+									await Task.Delay(300);
+								}
+
+								// ---------------------------------------------------------
+								// [Step 3-1] 사수 명령: 안정화 대기 후 최종 HTML 1회 더 인양
+								// ---------------------------------------------------------
+								Debug.WriteLine("[Action] 대기 종료. 최종 HTML 캡처 수행.");
+
+								// JS에서 html 필드만 정밀 타격하여 가져오거나, 전체 객체를 다시 수신
+								string finalJson = await MainWebView.ExecuteScriptAsync(checkScript);
+
+								if (!string.IsNullOrEmpty(finalJson) && finalJson != "null")
+								{
+									// [ID-02] JSON 이스케이프 정규화 (사수님이 치우신 똥 처리 로직 적용)
+									// 1. 앞뒤 따옴표 제거 2. 이중 백슬래시 및 이스케이프 따옴표 복원
+									string normalizedFinal = finalJson.Trim('"')
+										  .Replace("\\\"", "\"")
+										  .Replace("\\\\", "\\")
+										  .Replace("\\u003C", "<")  // HTML 태그 깨짐 방지
+                                          .Replace("\\u003E", ">");
+
+									using (JsonDocument finalDoc = JsonDocument.Parse(normalizedFinal))
+									{
+										var finalRoot = finalDoc.RootElement;
+										// 텍스트와 HTML을 최종적으로 갱신
+										currentText = finalRoot.GetProperty("text").GetString() ?? "";
+										currentHtml = finalRoot.GetProperty("html").GetString() ?? "";
+									}
+								}
+								// ---------------------------------------------------------
+
+								Debug.WriteLine($"[Success] 안정화 완료. 최종 HTML 파싱 전환.\n{currentHtml.Length} bytes");
+
+								// [Critical] 사수님의 역공학 함수로 최종 렌더링 텍스트 생성
+								string finalizedMd = ReconstructMarkdownFromHtml(currentHtml);
+
+								currentLog.LlmOutput = finalizedMd;
+								currentLog.Status = "수신 완료";
+
+								Debug.WriteLine($"최종 전체 텍스트(Finalized): {finalizedMd.Length} chars");
+								return currentLog.LlmOutput;
 							}
 						}
 					}
 				}
 				catch (Exception ex)
 				{
-					Debug.WriteLine($"[Error] {ex.Message} | Raw: {normalizedJson}");
+					Debug.WriteLine($"[Critical Error] {ex.Message}");
 				}
 
-				await Task.Delay(checkIntervalMs);
+				await Task.Delay(CHECK_INTERVAL_MS);
 			}
 
 			return currentLog.LlmOutput;
 		}
+
+		private string ReconstructMarkdownFromHtml(string html)
+		{
+			if (string.IsNullOrEmpty(html))
+				return string.Empty;
+
+			// 중요 디버그 라인 유지
+			Debug.WriteLine($"[DEBUG] Markdown convert Source: {html}");
+
+			// 0. [Sanitizing] HTML 내부의 지저분한 개행/공백 찌꺼기 먼저 제거 (데이터 응집도 확보)
+			string md = html.Replace("\r", "").Replace("\n", " ");
+
+			// 1. [Table Header] 헤더 개수 파악 및 구분선(|---|) 동적 생성
+			var headerMatches = System.Text.RegularExpressions.Regex.Matches(md, "<th[^>]*>(.*?)</th>", System.Text.RegularExpressions.RegexOptions.Singleline);
+			if (headerMatches.Count > 0)
+			{
+				string headerRow = "| ";
+				string dividerRow = "| ";
+				foreach (System.Text.RegularExpressions.Match match in headerMatches)
+				{
+					string cleanHeader = System.Text.RegularExpressions.Regex.Replace(match.Groups[1].Value, "<[^>]+>", "").Trim();
+					headerRow += cleanHeader + " | ";
+					dividerRow += "--- | ";
+				}
+				// <thead> 섹션 치환
+				md = System.Text.RegularExpressions.Regex.Replace(md, "<thead.*?>.*?</thead>", $"\n\n{headerRow}\n{dividerRow}", System.Text.RegularExpressions.RegexOptions.Singleline);
+			}
+
+			// 2. [Table Structure] 데이터 셀 및 행 복구 + [Critical] 테이블 종결 처리
+			md = md.Replace("</td>", " | ");
+			md = md.Replace("<tr>", "\n| ");
+			// [Action] 테이블이 끝나는 지점에 명시적 더블 개행을 주입하여 뒤따르는 텍스트와 격리
+			md = md.Replace("</table>", "</table>\n\n");
+
+			// 3. [Layout] p, br 태그 무결성 확보 (사수님 지침)
+			md = md.Replace("</p>", "\n\n").Replace("<p>", "\n\n");
+			md = md.Replace("<br>", "\n").Replace("<br/>", "\n");
+			md = md.Replace("</h3>", "\n\n### ").Replace("<h3>", "\n\n");
+
+			// 4. [Cleanup] 나머지 HTML 태그 소멸 (span, div 등)
+			md = System.Text.RegularExpressions.Regex.Replace(md, "<[^>]+>", string.Empty);
+
+			// 5. [Decode] HTML 특수문자 복원 (&nbsp; 등)
+			md = System.Net.WebUtility.HtmlDecode(md);
+
+			// 6. [Post-Process] 표 인식 안정화를 위한 전후 개행 정규화
+			// 표 시작(| ) 전후의 빈 줄을 확정하여 파서를 깨움
+			md = md.Replace("\n| ", "\n\n| ");
+			md = System.Text.RegularExpressions.Regex.Replace(md, @"\n{3,}", "\n\n");
+
+			md = md.Replace("| \n\n|", "| \n|");
+
+			// 중요 디버그 라인 유지
+			Debug.WriteLine($"[DEBUG] Markdown Source: {md}");
+
+			return md.Trim();
+		}
+
+		//private string ReconstructMarkdownFromHtml(string html)
+		//{
+		//	if (string.IsNullOrEmpty(html))
+		//		return string.Empty;
+
+		//	Debug.WriteLine($"[DEBUG] Markdown convert Source: {html}");
+
+		//	// 1. [Sanitizing] HTML 내부의 지저분한 개행 제거 (공정 안정화)
+		//	string cleanHtml = html.Replace("\r", "").Replace("\n", " ");
+
+		//	// 2. [Table Anchor] 표의 시작과 끝을 명확히 규정
+		//	// </table> 태그 뒤에 더블 개행을 박아 뒤따라오는 텍스트와의 유착을 방지합니다.
+		//	string md = cleanHtml.Replace("</table>", "</table>\n\n");
+		//	md = md.Replace("<tr>", "\n| ");
+		//	md = md.Replace("</th>", " | ").Replace("</td>", " | ");
+
+		//	// 3. [Divider Injection] 헤더 구분선 동적 생성 (사수님 설계 반영)
+		//	if (md.Contains("<thead"))
+		//	{
+		//		var headerMatches = System.Text.RegularExpressions.Regex.Matches(md, "<th[^>]*>");
+		//		if (headerMatches.Count > 0)
+		//		{
+		//			string dividerRow = "\n| " + string.Join(" | ", System.Linq.Enumerable.Repeat("---", headerMatches.Count)) + " |";
+		//			md = md.Replace("</thead>", "</thead>" + dividerRow);
+		//		}
+		//	}
+
+		//	// 4. [Paragraph & Layout] 문단 태그 치환
+		//	md = md.Replace("</p>", "\n\n").Replace("<p>", "\n\n");
+		//	md = md.Replace("<br>", "\n").Replace("<br/>", "\n");
+		//	md = md.Replace("</h3>", "\n\n### ").Replace("<hr", "\n\n---");
+
+		//	// 5. [Tag Strip] 나머지 모든 HTML 찌꺼기 제거
+		//	md = System.Text.RegularExpressions.Regex.Replace(md, "<[^>]+>", string.Empty);
+		//	md = System.Net.WebUtility.HtmlDecode(md);
+
+		//	// 6. [High Integrity] 최종 텍스트 밀도 조정
+		//	// 표 행(| ) 앞뒤로 불필요하게 뭉친 개행을 정리하되, 표 시작 전 빈 줄은 보존합니다.
+		//	md = System.Text.RegularExpressions.Regex.Replace(md, @"\n{3,}", "\n\n");
+		//	md = md.Replace("\n| ", "\n\n| ");
+
+		//	Debug.WriteLine($"[DEBUG] Markdown Source: {md}");
+
+		//	return md.Trim();
+		//}
+
+		//private string ReconstructMarkdownFromHtml(string html)
+		//{
+		//	if (string.IsNullOrEmpty(html))
+		//		return string.Empty;
+
+
+		//	Debug.WriteLine($"[DEBUG] Markdown convert Source: {html}");
+
+		//	// [ID-02] 원문 무결성 유지하며 태그 치환 시작
+		//	string md = html;
+
+
+
+		//	// 1. [Table Header] 헤더 개수 파악 및 구분선(|---|) 동적 생성
+		//	// <th> 내부의 복잡한 span 구조를 무시하고 실제 열 개수를 추출합니다.
+		//	var headerMatches = System.Text.RegularExpressions.Regex.Matches(md, "<th[^>]*>(.*?)</th>", System.Text.RegularExpressions.RegexOptions.Singleline);
+		//	if (headerMatches.Count > 0)
+		//	{
+		//		string headerRow = "| ";
+		//		string dividerRow = "| ";
+		//		foreach (System.Text.RegularExpressions.Match match in headerMatches)
+		//		{
+		//			// span 등 내부 태그 제거 후 순수 텍스트만 추출
+		//			string cleanHeader = System.Text.RegularExpressions.Regex.Replace(match.Groups[1].Value, "<[^>]+>", "").Trim();
+		//			headerRow += cleanHeader + " | ";
+		//			dividerRow += "--- | ";
+		//		}
+		//		// <thead> 섹션을 마크다운 표준 헤더 구조로 치환
+		//		md = System.Text.RegularExpressions.Regex.Replace(md, "<thead.*?>.*?</thead>", $"\n\n{headerRow}\n{dividerRow}", System.Text.RegularExpressions.RegexOptions.Singleline);
+		//	}
+
+		//	// 2. [Table Body] 데이터 셀 및 행 복구
+		//	md = md.Replace("</td>", " | ");
+		//	md = md.Replace("<tr>", "\n| ");
+
+		//	// 3. [Layout] 사수님이 강조하신 p, br 태그 무결성 확보
+		//	md = md.Replace("</p>", "\n\n").Replace("<p>", "\n\n");
+		//	md = md.Replace("<br>", "\n").Replace("<br/>", "\n");
+		//	md = md.Replace("</h3>", "\n\n").Replace("<h3>", "\n\n### ");
+
+		//	// 4. [Cleanup] 나머지 HTML 태그 소멸 (span, div 등)
+		//	md = System.Text.RegularExpressions.Regex.Replace(md, "<[^>]+>", string.Empty);
+
+		//	// 5. [Decode] HTML 특수문자 복원 (&nbsp; 등)
+		//	md = System.Net.WebUtility.HtmlDecode(md);
+
+		//	// 6. [Post-Process] 표 인식 안정화를 위한 전후 개행 정규화
+		//	md = md.Replace("\n| ", "\n\n| "); // 표 시작 전 빈 줄 강제
+		//	md = System.Text.RegularExpressions.Regex.Replace(md, @"\n{3,}", "\n\n");
+
+		//	Debug.WriteLine($"[DEBUG] Markdown Source: {md}");
+
+		//	return md.Trim();
+		//}
 
 		// 검증용 웹뷰를 통한 CVO 판단 로직
 		private async Task<string> RunCVOVerification(string llmResponse)
@@ -631,7 +936,7 @@ namespace LLM_IDE
 
 			MainWebView.Source = new Uri(loginUrl);
 
-			WebPopup.Visibility = Visibility.Visible;
+			// WebPopup.Visibility = Visibility.Visible;
 
 			// 2. 로그인 완료 대기 및 감지 루프 (선택 사항)
 			await MonitorLoginStatusAsync();
@@ -828,29 +1133,75 @@ namespace LLM_IDE
 
 			ShowSystemNotification("세션 목록이 최신 상태로 동기화되었습니다.");
 		}
+
+		private void rcvMsg_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+		{
+			// [ID-03] 이벤트 버블링 강제 구현
+			// 마우스 휠 신호를 받아서 부모(ScrollViewer)에게 전달한다.
+			if (!e.Handled)
+			{
+				e.Handled = true;
+				var eventArg = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+				{
+					RoutedEvent = UIElement.MouseWheelEvent,
+					Source = sender
+				};
+
+				// 부모 컨트롤을 찾아 이벤트를 발생시킴
+				var parent = ((Control)sender).Parent as UIElement;
+				parent?.RaiseEvent(eventArg);
+			}
+		}
 	}
 
-	
 
+
+	/**
+ * @class LogData
+ * @brief 사수 정의 구조 유지 및 실시간 UI 통지 로직 보정
+ */
 	public class LogData : System.ComponentModel.INotifyPropertyChanged
 	{
-		private string _llmOutput;
+		private string _llmOutput = string.Empty; // [IN-01] 초기화 필수
+		private string _status = "대기 중";       // [IN-01] 초기화 필수
+
+		// [ID-01] 기존 식별자 유지
 		public int Number { get; set; }
 		public string TimeStamp { get; set; }
 		public string UserInput { get; set; }
 
+		// [Logic] 실시간 스트리밍 업데이트를 위한 프로퍼티
 		public string LlmOutput
 		{
 			get => _llmOutput;
 			set
 			{
-				_llmOutput = value;
-				OnPropertyChanged(nameof(LlmOutput)); // 값이 바뀔 때 UI에 알림
+				if (_llmOutput != value) // [DC-06] 불필요한 UI 갱신 방지
+				{
+					_llmOutput = value;
+					OnPropertyChanged(nameof(LlmOutput));
+				}
 			}
 		}
 
+		// [Logic] 폴링 상태(Pending/수신 중/완료)를 UI에 표시하기 위한 프로퍼티 추가
+		public string Status
+		{
+			get => _status;
+			set
+			{
+				if (_status != value)
+				{
+					_status = value;
+					OnPropertyChanged(nameof(Status));
+				}
+			}
+		}
+
+		// [IN-02] PropertyChanged 구현부 보존
 		public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
-		protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+		protected void OnPropertyChanged(string name) =>
+			PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
 	}
 
 	public class GeminiSession
