@@ -25,6 +25,9 @@ namespace LLM_IDE
 		// true: 현재 전송되는 메시지가 '프로젝트 설정' 혹은 '지침'임을 의미해요.
 		private bool _isCriterionInjectionActive = false;
 
+		// [ID-01] UI와 자동 동기화되는 파일 목록 컬렉션
+		public ObservableCollection<FileItem> UploadedFiles { get; set; } = new ObservableCollection<FileItem>();
+
 		public MainWindow()
 		{
 			InitializeComponent();
@@ -65,6 +68,8 @@ namespace LLM_IDE
 				
 			//});
 			MainWebView.DefaultBackgroundColor = System.Drawing.Color.Transparent;
+
+			FileItemsControl.ItemsSource = UploadedFiles;
 		}
 
 		// 1. 노트패드 연동 (더블클릭 시)
@@ -1152,6 +1157,61 @@ namespace LLM_IDE
 				parent?.RaiseEvent(eventArg);
 			}
 		}
+
+		private void TxtInput_Drop(object sender, DragEventArgs e)
+		{
+			if (e.Data.GetDataPresent(DataFormats.FileDrop))
+			{
+				string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+
+				if (files != null && files.Length > 0)
+				{
+					foreach (string file in files)
+					{
+						// [Logic] 중복 등록 방지 (경로 기준)
+						if (!UploadedFiles.Any(f => f.FullPath == file))
+						{
+							UploadedFiles.Add(new FileItem
+							{
+								FileName = System.IO.Path.GetFileName(file),
+								FullPath = file
+							});
+						}
+					}
+
+					// [Logic] 파일이 등록되면 프리뷰 영역 표시
+					if (UploadedFiles.Count > 0)
+					{
+						FilePreviewArea.Visibility = Visibility.Visible;
+					}
+				}
+			}
+		}
+
+		private void TxtInput_PreviewDragOver(object sender, DragEventArgs e)
+		{
+			// 드롭 가능 표시 (마우스 커서 변경)
+			e.Effects = DragDropEffects.Copy;
+			e.Handled = true;
+		}
+
+		// [Logic] 카드 내 [x] 버튼 클릭 시 호출
+		private void BtnDeleteFile_Click(object sender, RoutedEventArgs e)
+		{
+			var btn = sender as Button;
+			if (btn?.Tag is FileItem item)
+			{
+				// 컬렉션에서 제거하면 UI에서 카드가 즉시 사라짐
+				UploadedFiles.Remove(item);
+
+				// [Logic] 모든 파일 제거 시 영역 숨김
+				if (UploadedFiles.Count == 0)
+				{
+					FilePreviewArea.Visibility = Visibility.Collapsed;
+				}
+			}
+		}
+
 	}
 
 
@@ -1208,5 +1268,12 @@ namespace LLM_IDE
 	{
 		public string Title { get; set; }
 		public string Url { get; set; }
+	}
+
+	// 1. 데이터 모델 정의
+	public class FileItem
+	{
+		public string FileName { get; set; }
+		public string FullPath { get; set; }
 	}
 }
