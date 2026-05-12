@@ -7,6 +7,17 @@ LLM IDE is an experimental workspace for managing long-running LLM work as a for
 
 LLM IDE는 장기 LLM 작업을 **수동 자연어 프로그래밍**으로 보고, 이를 관리하기 위한 실험적 작업환경입니다.
 
+## 0. 
+
+AI는 영리합니다.  
+AI is smart.
+
+다만 당신의 일을, 바로 이해하진 못하죠.
+But it doesn’t understand your work right away.
+
+당신이 일하는 법을 알려주면, 더 잘 잘할거에요.
+Teach it how you work, and it will do better.
+
 ---
 
 ## 1. What is this?
